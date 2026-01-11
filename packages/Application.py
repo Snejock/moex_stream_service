@@ -1,19 +1,21 @@
 import asyncio
 import logging
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config.schema import AppConfig
 from packages.providers import ClickhouseProvider, MoexProvider
+from packages.utils import MoexCalendar
 
 logger = logging.getLogger(__name__)
 
 
 class Application:
-    def __init__(self, config_path: str = "./config/config.yml", cursor: int = None):
+    def __init__(self, config_path: str = "./config/config.yml", cursor: int | None = None):
         logger.info("Initialize applications...")
         self.config = self._load_config(config_path)
-        self.cursor: int | None = cursor
+        self.cursor = cursor
+        self.calendar = MoexCalendar(self.config.moex_calendar)
 
         logger.debug("Initializing providers...")
         self.ch_provider = ClickhouseProvider(config=self.config)
@@ -36,6 +38,8 @@ class Application:
                 await self._get_cursor()
 
             while True:
+                await self._wait_until_market_open()
+
                 try:
                     data = await self.moex_provider.fetch(
                         url="https://iss.moex.com/iss/engines/stock/markets/shares/trades.json",
@@ -43,6 +47,7 @@ class Application:
                     )
                     columns = data.get('trades', {}).get('columns', [])
                     rows = data.get('trades', {}).get('data', [])
+                    loaded_dttm = datetime.now()
 
                     # Порядок колонок может измениться, поэтому здесь выполняется определение индекса колонок
                     if rows and columns:
@@ -69,6 +74,7 @@ class Application:
                                 max_cursor = current_cursor
 
                             row = [
+                                loaded_dttm,
                                 i[idx['TRADENO']],
                                 datetime.strptime(f"{i[idx['TRADEDATE']]} {i[idx['TRADETIME']]}", '%Y-%m-%d %H:%M:%S'),
                                 i[idx['BOARDID']],
@@ -94,6 +100,7 @@ class Application:
                             await self.ch_provider.async_insert(
                                 table="ods_moex.trades",
                                 columns=[
+                                    "loaded_dttm",
                                     "trade_no",
                                     "trade_dttm",
                                     "board_id",
@@ -152,6 +159,7 @@ class Application:
             await self.ch_provider.query("""
                 CREATE TABLE IF NOT EXISTS ods_moex.trades
                 (
+                    loaded_dttm         DateTime,
                     trade_no            UInt64,
                     trade_dttm          DateTime,
                     board_id            LowCardinality(String),
@@ -199,3 +207,12 @@ class Application:
             except Exception as e:
                 logger.error(f"Failed to get cursor: {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
+
+    async def _wait_until_market_open(self):
+        if self.calendar.is_open():
+            return
+        next_open_dttm = self.calendar.get_next_open_dttm()
+        now_dttm = datetime.now(self.calendar.timezone)
+        wait_sec = max(0, int((next_open_dttm - now_dttm).total_seconds()))
+        logger.info(f"MOEX is closed. Waiting {timedelta(seconds=int(wait_sec))} until it opens at: {next_open_dttm.isoformat()}")
+        await asyncio.sleep(wait_sec)
