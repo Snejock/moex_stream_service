@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from config.schema import AppConfig
 from packages.providers import ClickhouseProvider, MoexProvider
@@ -16,6 +17,8 @@ class Application:
         self.config = self._load_config(config_path)
         self.cursor = cursor
         self.calendar = MoexCalendar(self.config.moex_calendar)
+        self.tz_local = ZoneInfo(self.config.moex_calendar.timezone)
+        self.tz_utc = timezone.utc
 
         logger.debug("Initializing providers...")
         self.ch_provider = ClickhouseProvider(config=self.config)
@@ -47,7 +50,7 @@ class Application:
                     )
                     columns = data.get('trades', {}).get('columns', [])
                     rows = data.get('trades', {}).get('data', [])
-                    loaded_dttm = datetime.now()
+                    loaded_dttm = datetime.now(self.tz_utc)
 
                     # Порядок колонок может измениться, поэтому здесь выполняется определение индекса колонок
                     if rows and columns:
@@ -73,10 +76,20 @@ class Application:
                             if current_cursor > max_cursor:
                                 max_cursor = current_cursor
 
+                            # приведение времени к UTC
+                            trade_local = datetime.strptime(
+                                f"{i[idx['TRADEDATE']]} {i[idx['TRADETIME']]}", '%Y-%m-%d %H:%M:%S'
+                            ).replace(tzinfo=self.tz_local)
+                            trade_utc = trade_local.astimezone(self.tz_utc)
+
+                            systime_local = datetime.strptime(i[idx['SYSTIME']], '%Y-%m-%d %H:%M:%S'
+                            ).replace(tzinfo=self.tz_local)
+                            systime_utc = systime_local.astimezone(self.tz_utc)
+
                             row = [
                                 loaded_dttm,
                                 i[idx['TRADENO']],
-                                datetime.strptime(f"{i[idx['TRADEDATE']]} {i[idx['TRADETIME']]}", '%Y-%m-%d %H:%M:%S'),
+                                trade_utc,
                                 i[idx['BOARDID']],
                                 i[idx['SECID']],
                                 i[idx['PRICE']],
@@ -84,7 +97,7 @@ class Application:
                                 i[idx['VALUE']],
                                 i[idx['PERIOD']],
                                 i[idx['TRADETIME_GRP']],
-                                datetime.strptime(i[idx['SYSTIME']], '%Y-%m-%d %H:%M:%S'),
+                                systime_utc,
                                 i[idx['BUYSELL']],
                                 i[idx['DECIMALS']],
                                 i[idx['TRADINGSESSION']],
