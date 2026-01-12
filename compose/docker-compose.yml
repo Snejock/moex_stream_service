@@ -1,4 +1,4 @@
-name: moex-stream-service
+name: octobus
 
 services:
   moex-stream-service:
