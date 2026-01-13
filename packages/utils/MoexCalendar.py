@@ -37,10 +37,13 @@ class MoexCalendar:
 
     def is_open(self, at: dt.datetime | None = None) -> bool:
         at = (at or dt.datetime.now(self.timezone)).astimezone(self.timezone)
-        is_work, start_dttm, stop_dttm = self._get_day_rule(at.date())
-        start_dttm = start_dttm + self.lag_start
-        stop_dttm = stop_dttm + self.lag_stop
-        return bool(is_work and start_dttm <= at <= stop_dttm)
+        for date in (at.date() - dt.timedelta(days=1), at.date()):
+            is_work, start_dttm, stop_dttm = self._get_day_rule(date)
+            start_dttm = start_dttm + self.lag_start
+            stop_dttm = stop_dttm + self.lag_stop
+            if is_work and start_dttm <= at <= stop_dttm:
+                return True
+        return False
 
     def get_next_open_dttm(self, now: dt.datetime | None = None) -> dt.datetime:
         now = (now or dt.datetime.now(self.timezone)).astimezone(self.timezone)
