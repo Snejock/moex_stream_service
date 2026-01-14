@@ -48,15 +48,15 @@ class Application:
                         url="https://iss.moex.com/iss/engines/stock/markets/shares/trades.json",
                         cursor=self.cursor
                     )
-                    columns = data.get('trades', {}).get('columns', [])
-                    rows = data.get('trades', {}).get('data', [])
+                    columns = data.get("trades", {}).get("columns", [])
+                    rows = data.get("trades", {}).get("data", [])
                     loaded_dttm = datetime.now(self.tz_utc)
 
                     # Порядок колонок может измениться, поэтому здесь выполняется определение индекса колонок
                     if rows and columns:
                         try:
                             idx = {col: i for i, col in enumerate(columns)}
-                            if 'TRADENO' not in idx or 'TRADETIME' not in idx:
+                            if "TRADENO" not in idx or "TRADETIME" not in idx:
                                 logger.error("Critical columns missing in MOEX response")
                                 await asyncio.sleep(5)
                                 continue
@@ -71,37 +71,38 @@ class Application:
 
                         # сборка payload для вставки
                         for i in rows:
-                            current_cursor = i[idx['TRADENO']]
+                            current_cursor = i[idx["TRADENO"]]
 
                             if current_cursor > max_cursor:
                                 max_cursor = current_cursor
 
                             # приведение времени к UTC
                             trade_local = datetime.strptime(
-                                f"{i[idx['TRADEDATE']]} {i[idx['TRADETIME']]}", '%Y-%m-%d %H:%M:%S'
+                                f"{i[idx["TRADEDATE"]]} {i[idx["TRADETIME"]]}", "%Y-%m-%d %H:%M:%S"
                             ).replace(tzinfo=self.tz_local)
                             trade_utc = trade_local.astimezone(self.tz_utc)
 
-                            systime_local = datetime.strptime(i[idx['SYSTIME']], '%Y-%m-%d %H:%M:%S'
+                            systime_local = datetime.strptime(i[idx["SYSTIME"]], "%Y-%m-%d %H:%M:%S"
                             ).replace(tzinfo=self.tz_local)
                             systime_utc = systime_local.astimezone(self.tz_utc)
 
                             row = [
                                 loaded_dttm,
-                                i[idx['TRADENO']],
+                                "MSS",
+                                i[idx["TRADENO"]],
                                 trade_utc,
-                                i[idx['BOARDID']],
-                                i[idx['SECID']],
-                                i[idx['PRICE']],
-                                i[idx['QUANTITY']],
-                                i[idx['VALUE']],
-                                i[idx['PERIOD']],
-                                i[idx['TRADETIME_GRP']],
+                                i[idx["BOARDID"]],
+                                i[idx["SECID"]],
+                                i[idx["PRICE"]],
+                                i[idx["QUANTITY"]],
+                                i[idx["VALUE"]],
+                                i[idx["PERIOD"]],
+                                i[idx["TRADETIME_GRP"]],
                                 systime_utc,
-                                i[idx['BUYSELL']],
-                                i[idx['DECIMALS']],
-                                i[idx['TRADINGSESSION']],
-                                datetime.strptime(i[idx['TRADE_SESSION_DATE']], '%Y-%m-%d').date()
+                                i[idx["BUYSELL"]],
+                                i[idx["DECIMALS"]],
+                                i[idx["TRADINGSESSION"]],
+                                datetime.strptime(i[idx["TRADE_SESSION_DATE"]], "%Y-%m-%d").date()
                             ]
 
                             payload.append(row)
@@ -111,9 +112,10 @@ class Application:
                             logger.info(f"Insert {len(payload)} trades, last id: {max_cursor}")
 
                             await self.ch_provider.async_insert(
-                                table="ods_moex.trades",
+                                table="stg.moex_trades",
                                 columns=[
                                     "loaded_dttm",
+                                    "source_system",
                                     "trade_no",
                                     "trade_dttm",
                                     "board_id",
@@ -167,12 +169,13 @@ class Application:
 
     async def _init_db(self) -> None:
         try:
-            await self.ch_provider.query("CREATE DATABASE IF NOT EXISTS ods_moex")
+            await self.ch_provider.query("CREATE DATABASE IF NOT EXISTS stg")
 
             await self.ch_provider.query("""
-                CREATE TABLE IF NOT EXISTS ods_moex.trades
+                CREATE TABLE IF NOT EXISTS stg.moex_trades
                 (
                     loaded_dttm         DateTime,
+                    source_system       LowCardinality(String),
                     trade_no            UInt64,
                     trade_dttm          DateTime,
                     board_id            LowCardinality(String),
@@ -206,7 +209,7 @@ class Application:
 
         while True:
             try:
-                result = await self.ch_provider.query(sql="SELECT max(trade_no) FROM ods_moex.trades")
+                result = await self.ch_provider.query(sql="SELECT max(trade_no) FROM stg.moex_trades")
 
                 if result and result[0] and result[0][0] is not None:
                     self.cursor = int(result[0][0])
